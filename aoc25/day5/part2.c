@@ -7,12 +7,8 @@ typedef struct Range {
 	uint64_t start;
 	uint64_t stop;
 	struct Range *next;
+	struct Range *prev;
 } Range;
-
-typedef struct Ingredient {
-	uint64_t value;
-	struct Ingredient *next;
-} Ingredient;
 
 Range*
 range_create(void) {
@@ -20,6 +16,7 @@ range_create(void) {
 	range->start = 0;
 	range->stop = 0;
 	range->next = (Range *)NULL;
+	range->prev = (Range *)NULL;
 	return range;
 }
 
@@ -28,21 +25,48 @@ range_print(Range *range) {
 	printf("R: %lu-%lu\n", range->start, range->stop);
 }
 
-Ingredient*
-ingredient_create(void) {
-	Ingredient *ingredient = malloc(sizeof(Ingredient));
-	ingredient->value = 0;
-	ingredient->next = (Ingredient *)NULL;
-	return ingredient;
+bool
+range_overlaps(Range *a, Range *b) {
+	if ((a->start >= b->start - 1 && a->start <= b->stop + 1)
+		|| (a->stop >= b->start - 1 && a->stop <= b->stop + 1)
+		|| (b->start >= a->start - 1 && b->start <= a->stop + 1)
+		|| (b->stop >= a->start - 1 && b->stop <= a->stop + 1)) {
+		return true;
+	}
+	return false;
 }
 
 void
-ingredient_print(Ingredient *ingredient) {
-	printf("I: %lu\n", ingredient->value);
+range_remove(Range *r) {
+	if (r->prev) { r->prev->next = r->next; }
+	if (r->next) { r->next->prev = r->prev; }
+	free(r);
+}
+
+void
+range_insert(Range *new_range, Range *ranges) {
+	Range *test_range = ranges;
+	while (test_range) {
+		Range *next = test_range->next;
+		if (range_overlaps(new_range, test_range)) {
+			if (test_range->start < new_range->start) {
+				new_range->start = test_range->start;
+			}
+			if (test_range->stop > new_range->stop) {
+				new_range->stop = test_range->stop;
+			}
+			range_remove(test_range);
+		}
+		test_range = next;
+	}
+	test_range = ranges;
+	while (test_range->next) { test_range = test_range->next; }
+	new_range->prev = test_range;
+	test_range->next = new_range;
 }
 
 int
-parse_file(char *filename, Range *ranges, Ingredient *ingredients) {
+parse_file(char *filename, Range *ranges) {
 	FILE *fptr = fopen(filename, "r");
 	if (!fptr) {
 		perror("Error opening file");
@@ -51,32 +75,24 @@ parse_file(char *filename, Range *ranges, Ingredient *ingredients) {
 	int ch, pch;
 	uint64_t num = 0;
 	bool ranges_done = false;
-	Range *curr_range = ranges;
-	Ingredient *curr_ingredient = ingredients;
-	while ((ch = getc(fptr)) != EOF) {
+	Range *new_range = range_create();
+	while (!ranges_done && (ch = getc(fptr)) != EOF) {
 		switch (ch) {
 			case '0' ... '9':
 				num = num * 10 + (ch - '0');
 				break;
 			case '-':
-				curr_range->start = num;
+				new_range->start = num;
 				num = 0;
 				break;
 			case '\n':
 				if (pch == '\n') {
 					ranges_done = true;
+					break;
 				}
-				else if (!ranges_done) {
-					curr_range->stop = num;
-					Range *new_range = range_create();
-					curr_range->next = new_range;
-					curr_range = new_range;
-				} else {
-					curr_ingredient->value = num;
-					Ingredient *new_ingredient = ingredient_create();
-					curr_ingredient->next = new_ingredient;
-					curr_ingredient = new_ingredient;
-				}
+				new_range->stop = num;
+				range_insert(new_range, ranges);
+				new_range = range_create();
 				num = 0;
 				break;
 			default:
@@ -85,51 +101,41 @@ parse_file(char *filename, Range *ranges, Ingredient *ingredients) {
 		pch = ch;
 	}
 	fclose(fptr);
-	// Remove empty first items
-	Range *r = ranges;
-	while (r->next != curr_range && r->next != (Range *)NULL) { r = r->next; }
-	r->next = (Range *)NULL;
-	free(curr_range);
-	Ingredient *i = ingredients;
-	while (i->next != curr_ingredient && i->next != (Ingredient *)NULL) { i = i->next; }
-	i->next = (Ingredient *)NULL;
-	free(curr_ingredient);
 	return EXIT_SUCCESS;
 }
 
 int
-main(void) {
-	int count = 0;
-	char *filename = "input.txt";
+main(int argc, char *argv[]) {
+	uint64_t count = 0;
+	char *filename;
+	if (argc > 1) {
+		filename = argv[1];
+	} else {
+		filename = "example.txt";
+	}
 	Range *ranges = range_create();
-	Ingredient *ingredients = ingredient_create();
-	if (parse_file(filename, ranges, ingredients) != EXIT_SUCCESS) {
+	if (parse_file(filename, ranges) != EXIT_SUCCESS) {
 		perror("Error parsing file %s");
 		return EXIT_FAILURE;
 	}
-	Ingredient *i = ingredients;
-	while (i) {
-		Range *r = ranges;
-		while (r) {
-			if (i->value >= r->start && i->value <= r->stop) {
-				count++;
-				break;
-			}
-			r = r->next;
-		}
-		i = i->next;
+	// Remove empty first items
+	if (!ranges->start && !ranges->stop && ranges->next) {
+		Range *r = ranges->next;
+		range_remove(ranges);
+		ranges = r;
 	}
-	printf("Count: %d\n", count);
+	// Main logic
 	// Cleanup
 	while(ranges) {
+		if (ranges->start || ranges->stop) {
+			uint64_t s = ranges->stop - ranges->start + 1;
+			count += s;
+			printf("%lu-%lu\t%lu\t%lu\n", ranges->start, ranges->stop, s, count);
+		}
 		Range *next = ranges->next;
 		free(ranges);
 		ranges = next;
 	}
-	while (ingredients) {
-		Ingredient *next = ingredients->next;
-		free(ingredients);
-		ingredients = next;
-	}
+	printf("Count: %lu\n", count);
 	return EXIT_SUCCESS;
 }
